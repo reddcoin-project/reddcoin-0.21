@@ -91,9 +91,9 @@ static constexpr std::chrono::microseconds GETDATA_TX_INTERVAL{std::chrono::seco
 /** Limit to avoid sending big packets. Not used in processing incoming GETDATA for compatibility */
 static const unsigned int MAX_GETDATA_SZ = 1000;
 /** Number of blocks that can be requested at any given time from a single peer. */
-static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
+static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 128;
 /** Timeout in seconds during which a peer must stall block download progress before being disconnected. */
-static const unsigned int BLOCK_STALLING_TIMEOUT = 2;
+static const unsigned int BLOCK_STALLING_TIMEOUT = 1;
 /** Number of headers sent in one getheaders result. We rely on the assumption that if a peer sends
  *  less than this number, we reached its tip. Changing this value is a protocol upgrade. */
 static const unsigned int MAX_HEADERS_RESULTS = 2000;
@@ -231,6 +231,8 @@ namespace {
         bool fValidatedHeaders;                                  //!< Whether this block has validated headers at the time of request.
         std::unique_ptr<PartiallyDownloadedBlock> partialBlock;  //!< Optional, used for CMPCTBLOCK downloads
     };
+
+    std::map<uint256, std::shared_ptr<CBlock>> mapBlocksUnknownParent GUARDED_BY(cs_main);
     std::map<uint256, std::pair<NodeId, std::list<QueuedBlock>::iterator> > mapBlocksInFlight GUARDED_BY(cs_main);
 
     /** Stack of nodes which we have set to announce using compact blocks */
@@ -2723,8 +2725,8 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         }
 
         if (best_block != nullptr) {
-            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::GETHEADERS, ::ChainActive().GetLocator(pindexBestHeader), *best_block));
-            LogPrint(BCLog::NET, "getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, best_block->ToString(), pfrom.GetId());
+            m_connman.PushMessage(&pfrom, msgMaker.Make(NetMsgType::GETBLOCKS, ::ChainActive().GetLocator(pindexBestHeader), *best_block));
+            LogPrint(BCLog::NET, "getblocks (%d) %s to peer=%d\n", pindexBestHeader->nHeight, best_block->ToString(), pfrom.GetId());
         }
 
         return;
@@ -3480,6 +3482,9 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         for (unsigned int n = 0; n < nCount; n++) {
             vRecv >> headers[n];
             ReadCompactSize(vRecv); // ignore tx count; assume it is 0.
+            if (headers[n].nVersion > POW_BLOCK_VERSION) {
+                ReadCompactSize(vRecv);
+            }
         }
 
         return ProcessHeadersMessage(pfrom, headers, /*via_compact_block=*/false);
@@ -3500,24 +3505,67 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         bool forceProcessing = false;
         const uint256 hash(pblock->GetHash());
+
+        auto it = g_chainman.BlockIndex().find(pblock->hashPrevBlock);
+        if (it != g_chainman.BlockIndex().end() && ((it->second->nStatus & BLOCK_HAVE_DATA) == 0))
         {
-            LOCK(cs_main);
-            // Also always process if we requested the block explicitly, as we may
-            // need it even though it is not a candidate for a new best tip.
-            forceProcessing |= MarkBlockAsReceived(hash);
-            // mapBlockSource is only used for punishing peers and setting
-            // which peers send us compact blocks, so the race between here and
-            // cs_main in ProcessNewBlock is fine.
-            mapBlockSource.emplace(hash, std::make_pair(pfrom.GetId(), true));
+            LogPrint(BCLog::NET, "Received block out of order: %s\n", pblock->GetHash().ToString());
+            if (mapBlocksInFlight.count(pblock->hashPrevBlock))
+            {
+                LOCK(cs_main);
+                mapBlocksUnknownParent.insert(std::make_pair(pblock->hashPrevBlock, pblock));
+                MarkBlockAsReceived(pblock->hashPrevBlock); // invalidate to send again.
+            }
         }
-        bool fNewBlock = false;
-        m_chainman.ProcessNewBlock(m_chainparams, pblock, forceProcessing, &fNewBlock);
-        if (fNewBlock) {
-            pfrom.nLastBlockTime = GetTime();
-        } else {
-            LOCK(cs_main);
-            mapBlockSource.erase(pblock->GetHash());
+        else
+        {
+            {
+                LOCK(cs_main);
+                // Also always process if we requested the block explicitly, as we may
+                // need it even though it is not a candidate for a new best tip.
+                forceProcessing |= MarkBlockAsReceived(hash);
+                // mapBlockSource is only used for sending reject messages and DoS scores,
+                // so the race between here and cs_main in ProcessNewBlock is fine.
+                mapBlockSource.emplace(hash, std::make_pair(pfrom.GetId(), true));
+            }
+
+            bool fNewBlock = false;
+            g_chainman.ProcessNewBlock(m_chainparams, pblock, forceProcessing, &fNewBlock);
+            if (fNewBlock)
+            {
+                pfrom.nLastBlockTime = GetTime();
+
+                std::deque<uint256> queue;
+                queue.push_back(hash);
+                while (!queue.empty())
+                {
+                    uint256 head = queue.front();
+                    queue.pop_front();
+                    auto it = mapBlocksUnknownParent.find(head);
+                    if (it != std::end(mapBlocksUnknownParent))
+                    {
+                        std::shared_ptr<CBlock> pblockrecursive = it->second;
+                        auto recursiveHash = pblockrecursive->GetHash();
+                        LogPrint(BCLog::NET, "%s: Processing out of order child %s of %s\n", __func__, recursiveHash.ToString(),
+                                 head.ToString());
+
+                        bool forceProcessing = false;
+                        {
+                            LOCK(cs_main);
+                            mapBlocksUnknownParent.erase(it);
+                            forceProcessing = MarkBlockAsReceived(recursiveHash);
+                        }
+                        g_chainman.ProcessNewBlock(m_chainparams, pblockrecursive, forceProcessing, &fNewBlock);
+                        queue.push_back(recursiveHash);
+                    }
+                }
+            }
+            else {
+                LOCK(cs_main);
+                mapBlockSource.erase(pblock->GetHash());
+            }
         }
+
         return;
     }
 

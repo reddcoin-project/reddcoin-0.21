@@ -52,6 +52,8 @@ struct DisconnectedBlockTransactions;
 struct PrecomputedTransactionData;
 struct LockPoints;
 
+static const int64_t COIN_YEAR_REWARD = 5 * CENT; // 5% per year
+
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
 static const unsigned int DEFAULT_MIN_RELAY_TX_FEE = 1000;
 /** Default for -limitancestorcount, max number of in-mempool ancestors */
@@ -72,7 +74,7 @@ static const int MAX_SCRIPTCHECK_THREADS = 15;
 static const int DEFAULT_SCRIPTCHECK_THREADS = 0;
 static const int64_t DEFAULT_MAX_TIP_AGE = 24 * 60 * 60;
 static const bool DEFAULT_CHECKPOINTS_ENABLED = true;
-static const bool DEFAULT_TXINDEX = false;
+static const bool DEFAULT_TXINDEX = true;
 static const char* const DEFAULT_BLOCKFILTERINDEX = "0";
 /** Default for -persistmempool */
 static const bool DEFAULT_PERSIST_MEMPOOL = true;
@@ -980,5 +982,12 @@ inline bool IsBlockPruned(const CBlockIndex* pblockindex)
 {
     return (fHavePruned && !(pblockindex->nStatus & BLOCK_HAVE_DATA) && pblockindex->nTx > 0);
 }
+
+// reddcoin specific functions
+CAmount GetProofOfWorkReward(unsigned int nBits);
+CAmount GetProofOfStakeReward(int64_t nCoinAge, const CAmount& nFees);
+CAmount GetProofOfStakeReward(int64_t nCoinAge, const CAmount& nFees, double fInflationAdjustment);
+double GetInflationAdjustment(const CBlockIndex* pindex, const Consensus::Params& consensusParams);
+bool VerifyHashTarget(CBlockIndex* pindexPrev, const CBlock& block, uint256& hashProof);
 
 #endif // BITCOIN_VALIDATION_H

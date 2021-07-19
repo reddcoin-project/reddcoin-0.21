@@ -117,3 +117,14 @@ int64_t ParseISO8601DateTime(const std::string& str)
         return 0;
     return (ptime - epoch).total_seconds();
 }
+
+std::string DateTimeStrFormat(const char* pszFormat, int64_t nTime)
+{
+    static std::locale classic(std::locale::classic());
+    std::locale loc(classic, new boost::posix_time::time_facet(pszFormat));
+    std::stringstream ss;
+    ss.imbue(loc);
+    ss << boost::posix_time::from_time_t(nTime);
+    return ss.str();
+}
+
