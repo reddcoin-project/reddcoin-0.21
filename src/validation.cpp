@@ -3346,13 +3346,6 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& block)
         LogPrintf("%s - couldnt get/set stake entropy bit (height %d)\n", __func__, pindexNew->nHeight);
     }
 
-    // PoSV: compute stake modifier
-    uint64_t nStakeModifier = 0;
-    bool fGeneratedStakeModifier = false;
-    if (!ComputeNextStakeModifier(pindexNew, nStakeModifier, fGeneratedStakeModifier)) {
-        LogPrintf("%s - couldnt get next stake modifier (height %d)\n", __func__, pindexNew->nHeight);
-    }
-    pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
     pindexNew->nChainWork = (pindexNew->pprev ? pindexNew->pprev->nChainWork : 0) + GetBlockProof(*pindexNew);
     pindexNew->RaiseValidity(BLOCK_VALID_TREE);
     if (pindexBestHeader == nullptr || pindexBestHeader->nChainWork < pindexNew->nChainWork)
@@ -3378,6 +3371,13 @@ void CChainState::ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pi
     pindexNew->RaiseValidity(BLOCK_VALID_TRANSACTIONS);
     setDirtyBlockIndex.insert(pindexNew);
 
+    // PoSV
+    if (block.IsProofOfStake()) {
+        pindexNew->SetProofOfStake();
+        pindexNew->prevoutStake = block.vtx[1]->vin[0].prevout;
+        pindexNew->nStakeTime = block.vtx[1]->nTime;
+    }
+
     if (pindexNew->pprev == nullptr || pindexNew->pprev->HaveTxsDownloaded()) {
         // If pindexNew is the genesis block or all parents are BLOCK_VALID_TRANSACTIONS.
         std::deque<CBlockIndex*> queue;
@@ -3392,6 +3392,16 @@ void CChainState::ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pi
                 LOCK(cs_nBlockSequenceId);
                 pindex->nSequenceId = nBlockSequenceId++;
             }
+
+            // PoSV: compute stake modifier
+            uint64_t nStakeModifier = 0;
+            bool fGeneratedStakeModifier = false;
+            if (!ComputeNextStakeModifier(pindex, nStakeModifier, fGeneratedStakeModifier)) {
+                LogPrintf("%s - couldnt get next stake modifier (height %d)\n", __func__, pindex->nHeight);
+            }
+            pindex->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
+
+
 
             if (m_chain.Tip() == nullptr || !setBlockIndexCandidates.value_comp()(pindex, m_chain.Tip())) {
                 setBlockIndexCandidates.insert(pindex);
@@ -3787,7 +3797,7 @@ bool VerifyHashTarget(CBlockIndex* pindexPrev, const CBlock& block, uint256& has
     if (hash != Params().GetConsensus().hashGenesisBlock) {
         if (block.IsProofOfStake()) {
             fValid = true;
-            if (!CheckProofOfStake(pindexPrev, *block.vtx[1], block.nBits, hashProof)) {
+            if (!CheckProofOfStake(pindexPrev, block.vtx[1], block.nBits, hashProof)) {
                 fValid = false;
                 LogPrintf("WARNING: VerifyHashTarget(): check proof-of-stake failed for block %s\n", hash.ToString());
             }

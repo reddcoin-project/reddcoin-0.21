@@ -108,6 +108,24 @@ static int64_t GetStakeModifierSelectionInterval()
     return nSelectionInterval;
 }
 
+// a sort routine to compare 2 pairs containing a block timestamp and blockhash.
+static bool compareCandidates(const std::pair<int, uint256> &a, const std::pair<int, uint256> &b)
+{
+	if (a.first != b.first) return a.first < b.first;
+	// Timestamps equal - also compare block hashes
+	const uint32_t *pa = a.second.GetDataPtr();
+	const uint32_t *pb = b.second.GetDataPtr();
+	int cnt = 256 / 32;
+	do {
+		--cnt;
+		if (pa[cnt] != pb[cnt])
+		{
+			return (pa[cnt] < pb[cnt]);
+		}
+	} while(cnt);
+		return false; // Elements are equal
+}
+
 // select a block from the candidate blocks in vSortedByTimestamp, excluding
 // already selected blocks in vSelectedBlocks, and with timestamp up to
 // nSelectionIntervalStop.
@@ -183,6 +201,8 @@ bool ComputeNextStakeModifier(const CBlockIndex* pindexCurrent, uint64_t &nStake
         return error("ComputeNextStakeModifier: unable to get last modifier");
     }
 
+    LogPrintf("ComputeNextStakeModifier: prev modifier=0x%016x time=%s height=%d\n", nStakeModifier, DateTimeStrFormat("%Y-%m-%d %H:%M:%S", nModifierTime).c_str(), pindexPrev->nHeight);
+
     if (nModifierTime / params.nModifierInterval >= pindexPrev->GetBlockTime() / params.nModifierInterval) {
         return true;
     }
@@ -201,7 +221,7 @@ bool ComputeNextStakeModifier(const CBlockIndex* pindexCurrent, uint64_t &nStake
 
     // Shuffle before sort
     std::reverse(vSortedByTimestamp.begin(), vSortedByTimestamp.end());
-    std::sort(vSortedByTimestamp.begin(), vSortedByTimestamp.end());
+    std::sort(vSortedByTimestamp.begin(), vSortedByTimestamp.end(), compareCandidates);
 
     // Select 64 blocks from candidate blocks to generate stake modifier
     uint64_t nStakeModifierNew = 0;
@@ -240,7 +260,7 @@ bool ComputeNextStakeModifier(const CBlockIndex* pindexCurrent, uint64_t &nStake
         }
         LogPrintf("ComputeNextStakeModifier: selection height [%d, %d] map %s\n", nHeightFirstCandidate, pindexPrev->nHeight, strSelectionMap.c_str());
     }
-    LogPrintf("ComputeNextStakeModifier: new modifier=0x%016x time=%s\n", nStakeModifierNew, FormatISO8601DateTime(pindexPrev->GetBlockTime()));
+    LogPrintf("ComputeNextStakeModifier: new modifier=0x%016x time=%s height=%d\n", nStakeModifierNew, FormatISO8601DateTime(pindexPrev->GetBlockTime()), pindexCurrent->nHeight);
 
     nStakeModifier = nStakeModifierNew;
     fGeneratedStakeModifier = true;
@@ -351,11 +371,6 @@ bool CheckStakeKernelHash(CBlockIndex* pindexPrev, unsigned int nBits, const CBl
     ss << nTimeBlockFrom << nTxPrevOffset << nTimeTxPrev << prevout.n << nTimeTx;
     hashProofOfStake = Hash(ss);
 
-    // Now check if proof-of-stake hash meets target protocol
-    if (UintToArith256(hashProofOfStake) > bnCoinDayWeight * bnTargetPerCoinDay) {
-        return false;
-    }
-
     if (fPrintProofOfStake) {
         LogPrintf("CheckStakeKernelHash() : using modifier 0x%016x at height=%d timestamp=%s for block from height=%d timestamp=%s\n",
                   nStakeModifier, nStakeModifierHeight,
@@ -368,17 +383,22 @@ bool CheckStakeKernelHash(CBlockIndex* pindexPrev, unsigned int nBits, const CBl
                   hashProofOfStake.ToString().c_str());
     }
 
+    // Now check if proof-of-stake hash meets target protocol
+    if (UintToArith256(hashProofOfStake) > bnCoinDayWeight * bnTargetPerCoinDay) {
+        return false;
+    }
+
     return true;
 }
 
 // Check kernel hash target and coinstake signature
-bool CheckProofOfStake(CBlockIndex* pindexPrev, const CTransaction& tx, unsigned int nBits, uint256& hashProofOfStake)
+bool CheckProofOfStake(CBlockIndex* pindexPrev, const CTransactionRef& tx, unsigned int nBits, uint256& hashProofOfStake)
 {
-    if (!tx.IsCoinStake())
-        return error("CheckProofOfStake() : called on non-coinstake %s", tx.GetHash().ToString().c_str());
+    if (!tx->IsCoinStake())
+        return error("CheckProofOfStake() : called on non-coinstake %s", tx->GetHash().ToString().c_str());
 
     // Kernel (input 0) must match the stake hash target per coin age (nBits)
-    const CTxIn& txin = tx.vin[0];
+    const CTxIn& txin = tx->vin[0];
 
     // Get transaction index for the previous transaction
     CDiskTxPos postx;
@@ -401,7 +421,7 @@ bool CheckProofOfStake(CBlockIndex* pindexPrev, const CTransaction& tx, unsigned
     }
 
     // Calculate stakehash
-    if (!CheckStakeKernelHash(pindexPrev, nBits, header, txin.prevout.n, txPrev, txin.prevout, tx.nTime, hashProofOfStake)) {
+    if (!CheckStakeKernelHash(pindexPrev, nBits, header, txin.prevout.n, txPrev, txin.prevout, tx->nTime, hashProofOfStake)) {
         return false;
     }
 

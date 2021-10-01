@@ -237,6 +237,8 @@ inline void UnserializeTransaction(TxType& tx, Stream& s) {
     s >> tx.nLockTime;
     if (tx.nVersion > POW_TX_VERSION) {
         s >> tx.nTime;
+    } else {
+    	tx.nTime = 0;
     }
 }
 
