@@ -2335,7 +2335,11 @@ bool CChainState::ConnectBlock(const CBlock& block, BlockValidationState& state,
                 nDevEndCredit = block.vtx[1]->vout[block.vtx[1]->vout.size() - 1].nValue;
 
                 if (nDevEndCredit != nCalculatedDevEndCredit && CBlockIndex::IsSuperMajority(5, pindex->pprev->pprev, 9000)) {
-                    return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-dev-amount");
+                    LogPrintf("WARNING: nDevEndCredit=%.f != nCalculatedDevEndCredit=%.2f\n", nDevEndCredit, nCalculatedDevEndCredit);
+                    if (nDevEndCredit > nCalculatedDevEndCredit) {
+                        LogPrintf("ERROR: nDevEndCredit=%.f > nCalculatedDevEndCredit=%.2f\n", nDevEndCredit, nCalculatedDevEndCredit);
+                        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-dev-amount");
+                    }
                 }
             }
         }
