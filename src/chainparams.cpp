@@ -253,11 +253,11 @@ public:
         };
 
         chainTxData = ChainTxData{
-            // Data from RPC: getchaintxstats 4096 0000000000000000000b9d2ec5a352ecba0592946514a92f14319dc2b367fc72
-            1591618067, // * UNIX timestamp of last known number of transactions
-            1797921,    // * total number of transactions between genesis and that timestamp
+            // Data from RPC: getchaintxstats 43800 d72ed42ab5d5d2b4737fb74a51de0bfc93328d083632a83e32af365f50e11b45
+        	1632457661, // * UNIX timestamp of last known number of transactions
+			11100239,    // * total number of transactions between genesis and that timestamp
                         //   (the tx=... number in the ChainStateFlushed debug.log lines)
-            0.00730216  // * estimated number of transactions per second after that timestamp
+			0.03697349  // * estimated number of transactions per second after that timestamp
         };
     }
 };
