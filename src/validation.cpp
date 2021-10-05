@@ -2165,8 +2165,13 @@ bool CChainState::ConnectBlock(const CBlock& block, BlockValidationState& state,
     // consensus change that ensures coinbases at those heights can not
     // duplicate earlier coinbases.
     if (fEnforceBIP30 || pindex->nHeight >= BIP34_IMPLIES_BIP30_LIMIT) {
+    	bool fProofOfStake = pindex->nHeight > Params().GetConsensus().nLastPowHeight;
         for (const auto& tx : block.vtx) {
             for (size_t o = 0; o < tx->vout.size(); o++) {
+                if(fProofOfStake && tx->IsCoinBase()) {
+                	o++;
+                    continue;
+                }
                 if (view.HaveCoin(COutPoint(tx->GetHash(), o))) {
                     LogPrintf("ERROR: ConnectBlock(): tried to overwrite transaction\n");
                     return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-BIP30");
